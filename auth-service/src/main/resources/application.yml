@@ -1,5 +1,39 @@
-﻿server:
+server:
   port: 8080
+
 spring:
   application:
     name: auth-service
+  # БД пока не используем — глушим только JDBC/JPA
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
+      - org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration
+
+  data:
+    redis:
+      host: localhost
+      port: 6379
+
+  kafka:
+    bootstrap-servers: localhost:9092
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+    properties:
+      # уберём тип-заголовки, чтобы не мешали потребителям на другой стороне
+      spring.json.add.type.headers: false
+
+kafka:
+  topic:
+    verification: auth.email.verification.request
+
+security:
+  jwt:
+    secret: "change-me-to-a-very-long-256-bit-secret-string-please"
+    accessMinutes: 15
+
+codes:
+  ttlMinutes: 10
+  attempts: 5
+  resendWindowSeconds: 60
