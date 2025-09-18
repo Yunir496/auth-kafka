@@ -5,6 +5,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -29,8 +30,21 @@ public class VerificationCodeStore {
         Map<String, String> map = new HashMap<>();
         map.put("code", code);
         map.put("attemptsLeft", String.valueOf(attempts));
+        map.put("lastSentAt", String.valueOf(Instant.now().getEpochSecond()));
         redis.opsForHash().putAll(key, map);
         redis.expire(key, Duration.ofMinutes(ttlMinutes));
+    }
+
+
+    public int secondsLeftToResend(String email, int windowSeconds) {
+        String key = key(email);
+        Object v = redis.opsForHash().get(key, "lastSentAt");
+        if (v == null) return 0;
+        long last = Long.parseLong(v.toString());
+        long now = Instant.now().getEpochSecond();
+        long diff = now - last;
+        long left = windowSeconds - diff;
+        return (int) Math.max(0, left);
     }
 
     public boolean verifyAndConsume(String email, String code) {
@@ -46,6 +60,10 @@ public class VerificationCodeStore {
         }
         redis.delete(key);
         return true;
+    }
+
+    public boolean hasActiveCode(String email) {
+        return Boolean.TRUE.equals(redis.hasKey(key(email)));
     }
 
     private String key(String email) { return "verify:" + email.toLowerCase(); }

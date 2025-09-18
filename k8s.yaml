@@ -1,0 +1,154 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: auth-kafka
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redpanda
+  namespace: auth-kafka
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: redpanda } }
+  template:
+    metadata: { labels: { app: redpanda } }
+    spec:
+      containers:
+        - name: redpanda
+          image: redpandadata/redpanda:v24.2.7
+          args:
+            - redpanda
+            - start
+            - --check=false
+            - --overprovisioned
+            - --smp=1
+            - --memory=512M
+            - --reserve-memory=0M
+            # в кластере нам хватает внутреннего PLAINTEXT-листенера
+            - --kafka-addr=PLAINTEXT://0.0.0.0:9092
+            - --advertise-kafka-addr=PLAINTEXT://redpanda:9092
+          ports:
+            - { containerPort: 9092, name: kafka }
+            - { containerPort: 9644, name: admin }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redpanda
+  namespace: auth-kafka
+spec:
+  selector: { app: redpanda }
+  ports:
+    - name: kafka
+      port: 9092
+      targetPort: 9092
+    - name: admin
+      port: 9644
+      targetPort: 9644
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: auth-kafka
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: redis } }
+  template:
+    metadata: { labels: { app: redis } }
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          args: ["redis-server","--appendonly","no"]
+          ports: [{ containerPort: 6379, name: redis }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: auth-kafka
+spec:
+  selector: { app: redis }
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: 6379
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auth-service
+  namespace: auth-kafka
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: auth-service } }
+  template:
+    metadata: { labels: { app: auth-service } }
+    spec:
+      containers:
+        - name: app
+          image: auth-kafka-auth-service:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - { name: KAFKA_BOOTSTRAP_SERVERS, value: "redpanda:9092" }
+            - { name: REDIS_HOST, value: "redis" }
+            - { name: KAFKA_TOPIC_VERIFICATION, value: "auth.email.verification.request" }
+            - name: SECURITY_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: jwt-secret
+                  key: SECURITY_JWT_SECRET
+          ports: [{ containerPort: 8080, name: http }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: auth-service
+  namespace: auth-kafka
+spec:
+  selector: { app: auth-service }
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mailer-spring
+  namespace: auth-kafka
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: mailer-spring } }
+  template:
+    metadata: { labels: { app: mailer-spring } }
+    spec:
+      containers:
+        - name: app
+          image: auth-kafka-mailer-spring:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - { name: KAFKA_BOOTSTRAP_SERVERS, value: "redpanda:9092" }
+            - { name: KAFKA_TOPIC_VERIFICATION, value: "auth.email.verification.request" }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mailer-native
+  namespace: auth-kafka
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: mailer-native } }
+  template:
+    metadata: { labels: { app: mailer-native } }
+    spec:
+      containers:
+        - name: app
+          image: auth-kafka-mailer-native:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - { name: KAFKA_BOOTSTRAP_SERVERS, value: "redpanda:9092" }
+            - { name: KAFKA_TOPIC_VERIFICATION, value: "auth.email.verification.request" }

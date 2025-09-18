@@ -1,16 +1,92 @@
-version: "3.9"
 services:
   redpanda:
-    image: redpandadata/redpanda:latest
-    command: >
-      redpanda start --overprovisioned --smp 1 --memory 512M --reserve-memory 0M
-      --node-id 0 --check=false
-      --kafka-addr PLAINTEXT://0.0.0.0:9092
-      --advertise-kafka-addr PLAINTEXT://localhost:9092
+    image: redpandadata/redpanda:v24.2.7
+    command:
+      - redpanda
+      - start
+      - --check=false
+      - --overprovisioned
+      - --smp=1
+      - --memory=512M
+      - --reserve-memory=0M
+      # два листенера: внутренний и внешний
+      - --kafka-addr=internal://0.0.0.0:29092,external://0.0.0.0:9092
+      - --advertise-kafka-addr=internal://redpanda:29092,external://localhost:9092
     ports:
-      - "9092:9092"
+      - "9092:9092"   # клиенты на хосте
+      - "9644:9644"   # admin api (не обязателен)
+    healthcheck:
+      test: ["CMD", "bash", "-lc", "rpk cluster info -X brokers=localhost:9092 >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - redpanda-data:/var/lib/redpanda/data
+    restart: unless-stopped
 
   redis:
-    image: redis:7
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "no"]
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  auth-service:
+    build:
+      context: .
+      dockerfile: auth-service/Dockerfile
+    image: auth-kafka-auth-service:latest
+    environment:
+
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: redpanda:29092
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: 6379
+
+      SECURITY_JWT_SECRET: ${SECURITY_JWT_SECRET:?put-it-into-.env}
+      KAFKA_TOPIC_VERIFICATION: ${KAFKA_TOPIC_VERIFICATION:-auth.email.verification.request}
+
+      KAFKA_BOOTSTRAP_SERVERS: redpanda:29092
+      REDIS_HOST: redis
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+  mailer-spring:
+    build:
+      context: .
+      dockerfile: mailer-spring/Dockerfile
+    environment:
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: redpanda:29092
+      KAFKA_BOOTSTRAP_SERVERS: redpanda:29092
+      KAFKA_TOPIC_VERIFICATION: ${KAFKA_TOPIC_VERIFICATION:-auth.email.verification.request}
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles: ["mailer"]
+
+  mailer-native:
+    build:
+      context: .
+      dockerfile: mailer-native/Dockerfile
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: redpanda:29092
+      KAFKA_TOPIC_VERIFICATION: ${KAFKA_TOPIC_VERIFICATION:-auth.email.verification.request}
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles: ["mailer"]
+
+volumes:
+  redpanda-data:
